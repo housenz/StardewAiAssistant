@@ -21,6 +21,7 @@ public sealed class GameSnapshot
     public string Stamina { get; set; } = "unknown";
     public string Skills { get; set; } = "unknown";
     public string Inventory { get; set; } = "unknown";
+    public string FarmCrops { get; set; } = "unknown";
     public string Wallet { get; set; } = "unknown";
     public string WorldProgress { get; set; } = "unknown";
     public string Stardrops { get; set; } = "unknown";
@@ -40,6 +41,7 @@ public sealed class GameSnapshot
             $"- 生命/体力：生命={Health}，体力={Stamina}",
             $"- 技能：{Skills}",
             $"- 背包：{Inventory}",
+            $"- 农场作物：{FarmCrops}",
             $"- 钱包/能力：{Wallet}",
             $"- 世界进度：{WorldProgress}",
             $"- 星之果实：{Stardrops}",

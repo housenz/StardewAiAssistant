@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using Microsoft.Xna.Framework;
 using StardewAiAssistant.Models;
 using StardewValley;
 
@@ -33,6 +34,7 @@ public sealed class GameContextService
             Stamina = FormatPair(ReadFloat(farmer, "stamina"), ReadInt(farmer, "MaxStamina")),
             Skills = BuildSkills(farmer),
             Inventory = BuildInventory(farmer),
+            FarmCrops = BuildFarmCrops(),
             Wallet = BuildWallet(farmer),
             WorldProgress = BuildWorldProgress(farmer),
             Stardrops = BuildStardrops(farmer),
@@ -123,7 +125,8 @@ public sealed class GameContextService
             ("战斗", "combatLevel")
         };
 
-        return string.Join("，", skills.Select(skill => $"{skill.Item1}={ReadInt(farmer, skill.Item2)?.ToString() ?? "unknown"}"));
+        var levels = string.Join("，", skills.Select(skill => $"{skill.Item1}={ReadInt(farmer, skill.Item2)?.ToString() ?? "unknown"}"));
+        return $"{levels}；职业={BuildProfessions(farmer)}";
     }
 
     private static string BuildInventory(object? farmer)
@@ -144,7 +147,8 @@ public sealed class GameContextService
             usedSlots++;
             var name = ReadString(item, "DisplayName", ReadString(item, "Name", "unknown"));
             var stack = ReadInt(item, "Stack") ?? 1;
-            names.Add(stack > 1 ? $"{name} x{stack}" : name);
+            var quality = FormatQuality(ReadInt(item, "Quality"));
+            names.Add(stack > 1 ? $"{name}{quality} x{stack}" : $"{name}{quality}");
         }
 
         var preview = names.Count == 0 ? "空" : string.Join("，", names.Take(18));
@@ -152,6 +156,106 @@ public sealed class GameContextService
             preview += $"，另有 {names.Count - 18} 项";
 
         return $"{usedSlots}/{totalSlots} 格；{preview}";
+    }
+
+    private static string BuildFarmCrops()
+    {
+        var farm = ReadStaticValue(typeof(Game1), "farm")
+            ?? typeof(Game1).GetMethod("getFarm", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.Invoke(null, Array.Empty<object>());
+        var terrainFeatures = ReadValue(farm, "terrainFeatures") as IEnumerable;
+        if (terrainFeatures is null)
+            return "unknown";
+
+        var crops = new List<CropInfo>();
+        foreach (var entry in terrainFeatures)
+        {
+            var feature = ReadProperty(entry, "Value");
+            if (feature is null || !feature.GetType().Name.Contains("HoeDirt", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var crop = ReadValue(feature, "crop");
+            if (crop is null)
+                continue;
+
+            var key = ReadProperty(entry, "Key");
+            var tile = FormatTile(key);
+            var cropName = GetCropName(crop);
+            var watered = ReadInt(feature, "state") > 0 || ReadBool(feature, "isWatered") is true;
+            var daysLeft = EstimateCropDaysLeft(crop);
+            crops.Add(new CropInfo(cropName, watered, daysLeft, tile));
+        }
+
+        if (crops.Count == 0)
+            return "农场没有检测到已种植作物，或当前版本无法读取作物数据";
+
+        var grouped = crops
+            .GroupBy(crop => new { crop.Name, crop.Watered, crop.DaysLeft })
+            .OrderByDescending(group => group.Count())
+            .Take(12)
+            .Select(group =>
+            {
+                var watered = group.Key.Watered ? "已浇水" : "未浇水";
+                var days = group.Key.DaysLeft is null ? "成熟时间未知" : group.Key.DaysLeft <= 0 ? "可收获或已成熟" : $"约 {group.Key.DaysLeft} 天成熟";
+                var sampleTiles = string.Join("、", group.Take(4).Select(crop => crop.Tile));
+                return $"{group.Key.Name} x{group.Count()}，{watered}，{days}，示例位置={sampleTiles}";
+            });
+
+        return string.Join("；", grouped);
+    }
+
+    private static string BuildProfessions(object? farmer)
+    {
+        var professions = ReadValue(farmer, "professions") as IEnumerable;
+        if (professions is null)
+            return "unknown";
+
+        var names = new List<string>();
+        foreach (var profession in professions)
+        {
+            var id = ConvertValue<int>(profession);
+            if (id is not null)
+                names.Add(ProfessionName(id.Value));
+        }
+
+        return names.Count == 0 ? "无或无法读取" : string.Join("，", names);
+    }
+
+    private static string ProfessionName(int id)
+    {
+        return id switch
+        {
+            0 => "牧场主",
+            1 => "农耕人",
+            2 => "鸡舍大师",
+            3 => "牧羊人",
+            4 => "工匠",
+            5 => "农业学家",
+            6 => "渔夫",
+            7 => "捕猎者",
+            8 => "垂钓者",
+            9 => "海盗",
+            10 => "水手",
+            11 => "诱饵大师",
+            12 => "护林人",
+            13 => "收集者",
+            14 => "伐木工",
+            15 => "萃取者",
+            16 => "植物学家",
+            17 => "追踪者",
+            18 => "矿工",
+            19 => "地质学家",
+            20 => "铁匠",
+            21 => "勘探者",
+            22 => "挖掘者",
+            23 => "宝石专家",
+            24 => "战士",
+            25 => "侦查员",
+            26 => "野兽猎人",
+            27 => "防御者",
+            28 => "杂技演员",
+            29 => "亡命徒",
+            _ => $"未知职业({id})"
+        };
     }
 
     private static string BuildWallet(object? farmer)
@@ -220,7 +324,11 @@ public sealed class GameContextService
             var value = ReadProperty(entry, "Value");
             var points = ReadInt(value, "Points");
             if (!string.IsNullOrWhiteSpace(key) && points is not null)
-                entries.Add($"{key}:{points / 250}心");
+            {
+                var giftsToday = ReadInt(value, "GiftsToday");
+                var giftsThisWeek = ReadInt(value, "GiftsThisWeek");
+                entries.Add($"{key}:{points / 250}心({points}好感，今日送礼={giftsToday?.ToString() ?? "未知"}，本周送礼={giftsThisWeek?.ToString() ?? "未知"})");
+            }
         }
 
         var preview = entries.Count == 0 ? "unknown" : string.Join("，", entries.OrderBy(value => value).Take(20));
@@ -308,15 +416,21 @@ public sealed class GameContextService
 
     private static object? ReadValue(object? target, string name)
     {
+        target = UnwrapNetValue(target);
         if (target is null)
             return null;
 
         var type = target.GetType();
-        return type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(target)
+        var value = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(target)
             ?? type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(target);
+        return UnwrapNetValue(value);
     }
 
-    private static object? ReadProperty(object? target, string name) => target?.GetType().GetProperty(name)?.GetValue(target);
+    private static object? ReadProperty(object? target, string name)
+    {
+        target = UnwrapNetValue(target);
+        return UnwrapNetValue(target?.GetType().GetProperty(name)?.GetValue(target));
+    }
 
     private static string ReadString(object? target, string name, string fallback) => ReadValue(target, name)?.ToString() ?? fallback;
 
@@ -330,6 +444,7 @@ public sealed class GameContextService
 
     private static T? ConvertValue<T>(object? value) where T : struct
     {
+        value = UnwrapNetValue(value);
         if (value is T typed)
             return typed;
 
@@ -345,4 +460,102 @@ public sealed class GameContextService
             return null;
         }
     }
+
+    private static object? UnwrapNetValue(object? value)
+    {
+        var visited = 0;
+        while (value is not null && visited++ < 4)
+        {
+            var type = value.GetType();
+            if (!type.FullName?.StartsWith("Netcode.", StringComparison.OrdinalIgnoreCase) ?? true)
+                return value;
+
+            var property = type.GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (property is null)
+                return value;
+
+            value = property.GetValue(value);
+        }
+
+        return value;
+    }
+
+    private static string FormatQuality(int? quality)
+    {
+        return quality switch
+        {
+            1 => "[银星]",
+            2 => "[金星]",
+            4 => "[铱星]",
+            _ => ""
+        };
+    }
+
+    private static string FormatTile(object? key)
+    {
+        key = UnwrapNetValue(key);
+        if (key is Vector2 vector)
+            return $"({(int)vector.X},{(int)vector.Y})";
+
+        var x = ReadProperty(key, "X")?.ToString() ?? "?";
+        var y = ReadProperty(key, "Y")?.ToString() ?? "?";
+        return $"({x},{y})";
+    }
+
+    private static string GetCropName(object crop)
+    {
+        var harvestId = ReadInt(crop, "indexOfHarvest")?.ToString()
+            ?? ReadValue(crop, "netFruitIndex")?.ToString()
+            ?? ReadValue(crop, "netSeedIndex")?.ToString();
+
+        if (string.IsNullOrWhiteSpace(harvestId))
+            return ReadString(crop, "Name", "未知作物");
+
+        var objectData = ReadStaticValue(typeof(Game1), "objectData") as IEnumerable;
+        if (objectData is not null)
+        {
+            foreach (var entry in objectData)
+            {
+                if (!string.Equals(ReadProperty(entry, "Key")?.ToString(), harvestId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var data = ReadProperty(entry, "Value");
+                var displayName = ReadString(data, "DisplayName", "");
+                var name = ReadString(data, "Name", "");
+                return !string.IsNullOrWhiteSpace(displayName) ? displayName : !string.IsNullOrWhiteSpace(name) ? name : $"物品ID {harvestId}";
+            }
+        }
+
+        return $"作物/收获物ID {harvestId}";
+    }
+
+    private static int? EstimateCropDaysLeft(object crop)
+    {
+        if (ReadBool(crop, "fullyGrown") is true)
+            return 0;
+
+        var phaseDays = ReadValue(crop, "phaseDays") as IEnumerable;
+        if (phaseDays is null)
+            return null;
+
+        var currentPhase = ReadInt(crop, "currentPhase") ?? ReadInt(crop, "phaseToShow") ?? 0;
+        var dayOfCurrentPhase = ReadInt(crop, "dayOfCurrentPhase") ?? 0;
+        var days = new List<int>();
+        foreach (var item in phaseDays)
+        {
+            var day = ConvertValue<int>(item);
+            if (day is not null)
+                days.Add(day.Value);
+        }
+        if (days.Count == 0 || currentPhase >= days.Count)
+            return null;
+
+        var remaining = Math.Max(0, days[currentPhase] - dayOfCurrentPhase);
+        for (var i = currentPhase + 1; i < days.Count; i++)
+            remaining += days[i];
+
+        return remaining;
+    }
+
+    private sealed record CropInfo(string Name, bool Watered, int? DaysLeft, string Tile);
 }

@@ -154,7 +154,7 @@ public sealed class AiChatMenu : IClickableMenu
 
         var snapshot = _gameContextService.Capture();
         _pendingCancellation = new CancellationTokenSource();
-        _pendingAnswer = _answerService.AnswerAsync(question, snapshot, _pendingCancellation.Token);
+        _pendingAnswer = _answerService.AnswerAsync(question, snapshot, _history.Messages, _pendingCancellation.Token);
         Game1.playSound("smallSelect");
     }
 

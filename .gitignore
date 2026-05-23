@@ -5,6 +5,6 @@ obj/
 *.user
 *.suo
 *.log
+StardewAiAssistant-debug.txt
 config.json
 *.zip
-

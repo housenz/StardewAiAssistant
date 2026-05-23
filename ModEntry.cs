@@ -23,7 +23,8 @@ public sealed class ModEntry : Mod
         _knowledgeService = new WikiKnowledgeService(Monitor);
 
         var aiClient = new AiClient(_config);
-        _answerService = new AnswerService(_config, aiClient, _knowledgeService, new NpcLocationService());
+        var debugLogger = new AgentDebugLogger(_config, Monitor, helper.DirectoryPath);
+        _answerService = new AnswerService(_config, aiClient, _knowledgeService, new NpcLocationService(), debugLogger);
 
         helper.Events.Input.ButtonPressed += OnButtonPressed;
     }
