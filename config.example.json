@@ -1,0 +1,16 @@
+{
+  "OpenMenuButton": "L",
+  "Provider": "OpenAICompatible",
+  "ApiKey": "",
+  "BaseUrl": "https://api.openai.com/v1",
+  "Model": "gpt-4o-mini",
+  "OllamaBaseUrl": "http://localhost:11434",
+  "OllamaModel": "qwen2.5:7b",
+  "DeepSeekThinking": "disabled",
+  "DeepSeekReasoningEffort": "high",
+  "Language": "zh-CN",
+  "TimeoutMs": 12000,
+  "MaxKnowledgeEntries": 6,
+  "PreferLocalAnswer": true,
+  "EnableDebugLogging": false
+}

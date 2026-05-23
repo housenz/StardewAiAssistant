@@ -1,0 +1,10 @@
+{
+  "Name": "Stardew AI Assistant",
+  "Author": "S",
+  "Version": "0.1.0",
+  "Description": "In-game AI Q&A assistant with Stardew Valley context and live biligame wiki lookup.",
+  "UniqueID": "S.StardewAiAssistant",
+  "EntryDll": "StardewAiAssistant.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}
