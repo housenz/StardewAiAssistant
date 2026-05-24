@@ -12,6 +12,7 @@ public sealed class ModEntry : Mod
     private ModConfig _config = new();
     private GameContextService _gameContextService = null!;
     private WikiKnowledgeService _knowledgeService = null!;
+    private WikiTitleIndexService _wikiTitleIndexService = null!;
     private ChatHistoryService _chatHistoryService = null!;
     private AnswerService _answerService = null!;
 
@@ -21,10 +22,11 @@ public sealed class ModEntry : Mod
         _gameContextService = new GameContextService();
         _chatHistoryService = new ChatHistoryService();
         _knowledgeService = new WikiKnowledgeService(Monitor);
+        _wikiTitleIndexService = new WikiTitleIndexService(helper.DirectoryPath, Monitor);
 
         var aiClient = new AiClient(_config);
         var debugLogger = new AgentDebugLogger(_config, Monitor, helper.DirectoryPath);
-        _answerService = new AnswerService(_config, aiClient, _knowledgeService, new NpcLocationService(), debugLogger);
+        _answerService = new AnswerService(_config, aiClient, _knowledgeService, _wikiTitleIndexService, new NpcLocationService(), debugLogger);
 
         helper.Events.Input.ButtonPressed += OnButtonPressed;
     }

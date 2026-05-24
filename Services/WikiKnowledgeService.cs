@@ -9,8 +9,10 @@ namespace StardewAiAssistant.Services;
 public sealed class WikiKnowledgeService
 {
     private const string ApiUrl = "https://wiki.biligame.com/stardewvalley/api.php";
+    private const int MaxStoredPageChars = 60000;
     private static readonly Regex HtmlTagRegex = new("<[^>]+>", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new("\\s+", RegexOptions.Compiled);
+    private static readonly Regex RedirectRegex = new(@"^重定向到：\s*(?<title>.+)$", RegexOptions.Compiled);
     private readonly IMonitor _monitor;
     private readonly Dictionary<string, KnowledgeEntry> _pageCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -119,7 +121,7 @@ public sealed class WikiKnowledgeService
             .ToList();
     }
 
-    private static async Task<KnowledgeEntry?> FetchPageAsync(HttpClient client, string title, CancellationToken cancellationToken)
+    private async Task<KnowledgeEntry?> FetchPageAsync(HttpClient client, string title, CancellationToken cancellationToken, int redirectDepth = 0)
     {
         var url = $"{ApiUrl}?action=parse&format=json&prop=text&disabletoc=1&disableeditsection=1&page={Uri.EscapeDataString(title)}";
         using var response = await client.GetAsync(url, cancellationToken);
@@ -134,7 +136,20 @@ public sealed class WikiKnowledgeService
             !textElement.TryGetProperty("*", out var htmlElement))
             return null;
 
-        var text = ExtractUsefulText(title, StripHtml(htmlElement.GetString() ?? ""));
+        var strippedText = StripHtml(htmlElement.GetString() ?? "");
+        var redirectTarget = TryGetRedirectTarget(strippedText);
+        if (!string.IsNullOrWhiteSpace(redirectTarget) && redirectDepth < 3)
+        {
+            _monitor.Log($"Following wiki redirect: {title} -> {redirectTarget}", LogLevel.Trace);
+            var redirected = await FetchPageAsync(client, redirectTarget, cancellationToken, redirectDepth + 1);
+            if (redirected is not null)
+            {
+                _pageCache[title] = redirected;
+                return redirected;
+            }
+        }
+
+        var text = ExtractUsefulText(title, strippedText);
         if (string.IsNullOrWhiteSpace(text))
             return null;
 
@@ -144,8 +159,17 @@ public sealed class WikiKnowledgeService
             Title = title,
             Keywords = BuildKeywords(title),
             Conditions = new KnowledgeConditions(),
-            Content = text.Length > 12000 ? text[..12000] : text
+            Content = Truncate(text, MaxStoredPageChars)
         };
+    }
+
+    private static string TryGetRedirectTarget(string text)
+    {
+        var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line)) ?? text.Trim();
+        var match = RedirectRegex.Match(firstLine);
+        return match.Success ? match.Groups["title"].Value.Trim() : "";
     }
 
     private static string ExtractUsefulText(string title, string text)
@@ -153,23 +177,12 @@ public sealed class WikiKnowledgeService
         if (string.IsNullOrWhiteSpace(text))
             return "";
 
-        var scheduleStart = text.IndexOf("日程", StringComparison.Ordinal);
-        if (scheduleStart < 0)
-            return text.Length > 5000 ? text[..5000] : text;
+        return $"{title} 页面全文：{Truncate(text, MaxStoredPageChars)}";
+    }
 
-        var sectionEndCandidates = new[]
-        {
-            text.IndexOf("人际关系", scheduleStart, StringComparison.Ordinal),
-            text.IndexOf("送礼", scheduleStart, StringComparison.Ordinal),
-            text.IndexOf("观影", scheduleStart, StringComparison.Ordinal),
-            text.IndexOf("好感度事件", scheduleStart, StringComparison.Ordinal)
-        }.Where(index => index > scheduleStart).ToList();
-
-        var sectionEnd = sectionEndCandidates.Count == 0 ? Math.Min(text.Length, scheduleStart + 12000) : sectionEndCandidates.Min();
-        var intro = text[..Math.Min(scheduleStart, 800)].Trim();
-        var schedule = text[scheduleStart..Math.Min(text.Length, sectionEnd)].Trim();
-
-        return $"{title} 页面摘要：{intro}\n\n{title} 日程章节：{schedule}";
+    private static string Truncate(string value, int maxLength)
+    {
+        return value.Length <= maxLength ? value : value[..maxLength] + $"\n...[truncated {maxLength}/{value.Length} chars]";
     }
 
     private static string StripHtml(string html)

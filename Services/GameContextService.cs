@@ -22,6 +22,7 @@ public sealed class GameContextService
             DayOfMonth = Game1.dayOfMonth,
             Year = Game1.year,
             DayOfWeek = GetDayOfWeek(),
+            TomorrowDayOfWeek = GetTomorrowDayOfWeek(),
             CurrentLocation = BuildLocationDescription(location),
             PlayerName = ReadString(farmer, "Name", "Player"),
             FarmName = ReadString(farmer, "farmName", "unknown"),
@@ -77,12 +78,23 @@ public sealed class GameContextService
             ReadNestedString(ReadStaticValue(typeof(Game1), "worldState"), "WeatherForTomorrow")
         };
 
-        return candidates.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "unknown";
+        var rawWeather = candidates.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "unknown";
+        return NormalizeWeather(rawWeather);
     }
 
     private static string GetDayOfWeek()
     {
-        return (Game1.dayOfMonth % 7) switch
+        return GetDayOfWeek(Game1.dayOfMonth);
+    }
+
+    private static string GetTomorrowDayOfWeek()
+    {
+        return GetDayOfWeek(Game1.dayOfMonth + 1);
+    }
+
+    private static string GetDayOfWeek(int dayOfMonth)
+    {
+        return (dayOfMonth % 7) switch
         {
             1 => "Monday",
             2 => "Tuesday",
@@ -91,6 +103,22 @@ public sealed class GameContextService
             5 => "Friday",
             6 => "Saturday",
             _ => "Sunday"
+        };
+    }
+
+    private static string NormalizeWeather(string weather)
+    {
+        return weather.Trim().ToLowerInvariant() switch
+        {
+            "sun" or "sunny" => "sunny",
+            "rain" or "rainy" => "rain",
+            "storm" or "lightning" => "storm",
+            "snow" or "snowy" => "snow",
+            "wind" or "windy" => "wind",
+            "festival" => "festival",
+            "greenrain" or "green_rain" => "green_rain",
+            "" => "unknown",
+            var value => value
         };
     }
 

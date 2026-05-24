@@ -14,7 +14,7 @@ public sealed class AnswerService
         ["Clint"] = new[] { "克林特", "Clint" },
         ["Demetrius"] = new[] { "德米特里厄斯", "Demetrius" },
         ["Elliott"] = new[] { "艾利欧特", "Elliott" },
-        ["Emily"] = new[] { "艾米丽", "Emily" },
+        ["Emily"] = new[] { "艾米丽", "艾米莉", "Emily" },
         ["Evelyn"] = new[] { "艾芙琳", "Evelyn" },
         ["George"] = new[] { "乔治", "George" },
         ["Gus"] = new[] { "格斯", "Gus" },
@@ -53,17 +53,38 @@ public sealed class AnswerService
         "在哪", "在哪里", "日程", "位置", "什么时候", "鱼", "作物", "料理", "任务", "事件"
     };
 
+    private static readonly Dictionary<string, string[]> WikiEntityAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["旅行货车"] = new[] { "旅行货车", "猪车", "旅行商人" },
+        ["星之果实"] = new[] { "星之果实", "星星果实" },
+        ["社区中心"] = new[] { "社区中心", "收集包" },
+        ["姜岛"] = new[] { "姜岛", "姜饼岛" },
+        ["沙漠"] = new[] { "沙漠", "卡利科沙漠" },
+        ["矿井"] = new[] { "矿井", "矿洞" },
+        ["骷髅洞穴"] = new[] { "骷髅洞穴", "骷髅洞", "沙漠矿洞" },
+        ["下水道"] = new[] { "下水道", "科罗布斯" },
+        ["温室"] = new[] { "温室" }
+    };
+
+    private static readonly string[] InvalidStandaloneWikiTerms =
+    {
+        "时间", "到达时间", "什么时候", "几点", "何时", "哪天", "今天", "明天", "星期",
+        "位置", "地点", "在哪里", "在哪", "哪里", "怎么", "如何", "方法", "条件", "出现", "开放时间"
+    };
+
     private readonly ModConfig _config;
     private readonly AiClient _aiClient;
     private readonly WikiKnowledgeService _knowledgeService;
+    private readonly WikiTitleIndexService _wikiTitleIndexService;
     private readonly NpcLocationService _npcLocationService;
     private readonly AgentDebugLogger _debugLogger;
 
-    public AnswerService(ModConfig config, AiClient aiClient, WikiKnowledgeService knowledgeService, NpcLocationService npcLocationService, AgentDebugLogger debugLogger)
+    public AnswerService(ModConfig config, AiClient aiClient, WikiKnowledgeService knowledgeService, WikiTitleIndexService wikiTitleIndexService, NpcLocationService npcLocationService, AgentDebugLogger debugLogger)
     {
         _config = config;
         _aiClient = aiClient;
         _knowledgeService = knowledgeService;
+        _wikiTitleIndexService = wikiTitleIndexService;
         _npcLocationService = npcLocationService;
         _debugLogger = debugLogger;
     }
@@ -103,8 +124,19 @@ public sealed class AnswerService
         }
 
         var systemPrompt = BuildFinalSupervisorPrompt(snapshot, supervisorDecision, plan, execution, npcLocation.Context);
-        _debugLogger.Log("final-supervisor-prompt", TrimForLog(systemPrompt, 8000));
+        _debugLogger.Log("prompt-copy", $"Copied {execution.Knowledge.Count} wiki entries into final-supervisor prompt.");
+        _debugLogger.Log("final-supervisor-prompt", TrimForLog(systemPrompt, 30000));
         var finalAnswer = await _aiClient.CompleteAsync(systemPrompt, conversationMessages, cancellationToken);
+        _debugLogger.Log("final-answer-draft", finalAnswer);
+
+        var answerReview = await AnswerCheckerAgentReviewAsync(question, snapshot, finalAnswer, cancellationToken);
+        _debugLogger.Log("answer-checker", $"isCorrect={answerReview.IsCorrect}; issues={string.Join("；", answerReview.Issues)}");
+        if (!answerReview.IsCorrect && !string.IsNullOrWhiteSpace(answerReview.CorrectedAnswer))
+        {
+            _debugLogger.Log("final-answer-corrected", answerReview.CorrectedAnswer);
+            return answerReview.CorrectedAnswer;
+        }
+
         _debugLogger.Log("final-answer", finalAnswer);
         return finalAnswer;
     }
@@ -121,6 +153,7 @@ public sealed class AnswerService
             "你是《星露谷物语》游戏内问答系统的 supervisor-agent。\n" +
             "你的任务是判断用户问题是否能直接由当前游戏状态回答，还是必须查询 wiki。\n" +
             "注意：如果要查 wiki，wiki 只支持关键词/页面名搜索，不支持语义搜索。\n" +
+            "注意：明天天气字段里的 sunny/Sun 是天气，不是 Sunday/星期日；明天星期几只能看“明天星期”字段。\n" +
             "只返回 JSON，不要返回 Markdown，不要解释。\n" +
             "JSON 格式：{\"needsWiki\":true,\"canAnswerFromContext\":false,\"reason\":\"...\",\"informationNeeded\":[\"...\"]}";
 
@@ -171,6 +204,7 @@ public sealed class AnswerService
             "如果 supervisor 判断需要查 wiki，你必须把自然语言问题拆成 biligame wiki 能搜索的短关键词或精确页面名。\n" +
             "wiki 不支持语义搜索，所以不要把整句问题当成查询词。\n" +
             "优先使用：NPC 中文名、物品名、任务名、地点名、日程、送礼、配方、鱼、作物等页面关键词。\n" +
+            "不要使用“时间”“到达时间”“什么时候”“几点”“在哪里”这类意图词作为查询词；例如用户问“猪车什么时候来”，应查询“旅行货车”，不要查询“旅行货车 时间”。\n" +
             "如果用户没说出有效关键词，你需要根据意图推理相关关键词。\n" +
             "只返回 JSON，不要返回 Markdown，不要解释。\n" +
             "JSON 格式：{\"needsWiki\":true,\"steps\":[\"...\"],\"queries\":[{\"text\":\"海莉\",\"exactPage\":true,\"reason\":\"...\"},{\"text\":\"海莉 日程\",\"exactPage\":false,\"reason\":\"...\"}]}";
@@ -215,6 +249,7 @@ public sealed class AnswerService
             "上一次查询结果不足。你必须根据失败日志和已获得的 wiki 摘要，重新给出更好的 biligame wiki 关键词。\n" +
             "wiki 只支持关键词/页面名搜索，不支持语义搜索。请使用更短、更像页面标题的关键词。\n" +
             "不要重复已经查过的关键词。\n" +
+            "不要使用“时间”“到达时间”“什么时候”“几点”“在哪里”这类意图词作为查询词；应该回退到物品、NPC、地点、商店或机制的页面名。\n" +
             "只返回 JSON，不要返回 Markdown，不要解释。\n" +
             "JSON 格式：{\"needsWiki\":true,\"steps\":[\"...\"],\"queries\":[{\"text\":\"关键词\",\"exactPage\":false,\"reason\":\"...\"}]}";
 
@@ -278,7 +313,7 @@ public sealed class AnswerService
         }
 
         var distinctKnowledge = DeduplicateKnowledge(knowledge);
-        _debugLogger.Log("wiki-knowledge", FormatKnowledge(distinctKnowledge, 6000));
+        _debugLogger.Log("wiki-knowledge", FormatKnowledge(distinctKnowledge, 50000));
         var executionReview = await ExecuteAgentReviewAsync(question, snapshot, plan, distinctKnowledge, logs, cancellationToken);
         _debugLogger.Log("execute-review", $"isSufficient={executionReview.IsSufficient}; summary={executionReview.Summary}; missing={string.Join("；", executionReview.MissingInfo)}");
         return new ExecutionResult(distinctKnowledge, logs, executionReview.Summary, executionReview.IsSufficient);
@@ -296,6 +331,7 @@ public sealed class AnswerService
             "你是《星露谷物语》游戏内问答系统的 execute-agent。\n" +
             "你已经执行了 plan-agent 的 wiki 查询计划。现在请判断工具结果是否足够支持最终回答。\n" +
             "你不能编造，只能根据当前游戏状态、查询日志和 wiki 摘要判断是否足够。\n" +
+            "重要：明天天气字段里的 sunny/Sun 是天气，不是 Sunday/星期日；明天星期几只能看“明天星期”字段。\n" +
             "只返回 JSON，不要返回 Markdown，不要解释。\n" +
             "JSON 格式：{\"isSufficient\":true,\"summary\":\"...\",\"missingInfo\":[\"...\"]}";
 
@@ -304,10 +340,11 @@ public sealed class AnswerService
             "用户问题：\n" + question + "\n\n" +
             "plan-agent 计划：\n" + FormatPlan(plan) + "\n\n" +
             "查询日志：\n" + string.Join("\n", logs.Select(log => "- " + log)) + "\n\n" +
-            "wiki 摘要：\n" + FormatKnowledge(knowledge, 6000);
+            "wiki 摘要：\n" + FormatKnowledge(knowledge, 20000);
 
         _debugLogger.Log("execute-review-agent", "Calling AI execute-agent to review tool results.");
-        _debugLogger.Log("execute-review-prompt", TrimForLog(systemPrompt + "\n\n" + userPrompt, 7000));
+        _debugLogger.Log("prompt-copy", $"Copied {knowledge.Count} wiki entries into execute-review prompt.");
+        _debugLogger.Log("execute-review-prompt", TrimForLog(systemPrompt + "\n\n" + userPrompt, 25000));
         var response = await _aiClient.CompleteAsync(systemPrompt, SingleUserMessage(userPrompt), cancellationToken);
         _debugLogger.Log("execute-review-response", TrimForLog(response, 4000));
         var parsed = ParseExecutionReview(response);
@@ -316,6 +353,38 @@ public sealed class AnswerService
 
         _debugLogger.Log("execute-review-parse", "AI response was not valid JSON. Using knowledge count fallback.");
         return new ExecutionReview(knowledge.Count > 0, "execute-agent 未返回可解析 JSON，使用工具结果数量作为兜底判断。", Array.Empty<string>());
+    }
+
+    private async Task<AnswerReview> AnswerCheckerAgentReviewAsync(
+        string question,
+        GameSnapshot snapshot,
+        string answer,
+        CancellationToken cancellationToken)
+    {
+        var systemPrompt =
+            "你是《星露谷物语》游戏内问答系统的 answer-checker-agent。\n" +
+            "你的任务是检查最终答案是否与确定的游戏状态矛盾，尤其是星期、日期、天气、金钱、背包、技能等低级事实。\n" +
+            "重要：TomorrowWeather/明天天气是天气字段，sunny/Sun 表示晴天，不是 Sunday/星期日。星期只以 TomorrowDayOfWeek/明天星期字段为准。\n" +
+            "如果答案有事实错误，给出修正后的完整答案；如果没有错误，correctedAnswer 留空。\n" +
+            "只返回 JSON，不要返回 Markdown，不要解释。\n" +
+            "JSON 格式：{\"isCorrect\":true,\"issues\":[\"...\"],\"correctedAnswer\":\"...\"}";
+
+        var userPrompt =
+            snapshot.ToPromptContext() + "\n\n" +
+            "用户问题：\n" + question + "\n\n" +
+            "待检查答案：\n" + answer;
+
+        _debugLogger.Log("answer-checker-agent", "Calling AI answer-checker-agent.");
+        _debugLogger.Log("answer-checker-prompt", TrimForLog(systemPrompt + "\n\n" + userPrompt, 5000));
+        var response = await _aiClient.CompleteAsync(systemPrompt, SingleUserMessage(userPrompt), cancellationToken);
+        _debugLogger.Log("answer-checker-response", TrimForLog(response, 4000));
+
+        var parsed = ParseAnswerReview(response);
+        if (parsed is not null)
+            return ApplyDeterministicAnswerChecks(snapshot, answer, parsed);
+
+        _debugLogger.Log("answer-checker-parse", "AI response was not valid JSON. Using deterministic checks only.");
+        return ApplyDeterministicAnswerChecks(snapshot, answer, new AnswerReview(true, Array.Empty<string>(), ""));
     }
 
     private static string BuildFinalSupervisorPrompt(
@@ -332,6 +401,7 @@ public sealed class AnswerService
             "回答要中文、简洁、直接，适合游戏内阅读。\n" +
             "如果信息不足，明确说无法确定，并说明缺少哪类信息；不要让玩家自己去查网页。\n" +
             "涉及计算时，先根据背包、职业、品质、数量等信息逐步核算，再给结论。\n\n" +
+            "重要：明天天气字段里的 sunny/Sun 是天气，不是 Sunday/星期日；明天星期几只能看“明天星期”字段。\n\n" +
             snapshot.ToPromptContext() + "\n\n" +
             "NPC 实时位置上下文：\n" +
             (string.IsNullOrWhiteSpace(npcLocationContext) ? "无" : npcLocationContext) + "\n\n" +
@@ -342,7 +412,7 @@ public sealed class AnswerService
             $"- informationNeeded={string.Join("；", decision.InformationNeeded)}\n\n" +
             "plan-agent 最终计划：\n" + FormatPlan(plan) + "\n\n" +
             "execute-agent 执行结果：\n" + FormatExecution(execution) + "\n\n" +
-            "wiki 查询结果：\n" + FormatKnowledge(execution.Knowledge, 12000);
+            "wiki 查询结果：\n" + FormatKnowledge(execution.Knowledge, 30000);
     }
 
     private SupervisorDecision BuildDeterministicSupervisorDecision(string question)
@@ -432,11 +502,85 @@ public sealed class AnswerService
         );
     }
 
+    private static AnswerReview? ParseAnswerReview(string response)
+    {
+        using var document = TryParseJsonObject(response);
+        if (document is null)
+            return null;
+
+        var root = document.RootElement;
+        return new AnswerReview(
+            GetBool(root, "isCorrect") ?? false,
+            GetStringArray(root, "issues"),
+            GetString(root, "correctedAnswer") ?? ""
+        );
+    }
+
+    private static AnswerReview ApplyDeterministicAnswerChecks(GameSnapshot snapshot, string answer, AnswerReview review)
+    {
+        var issues = review.Issues.ToList();
+        var correctedAnswer = review.CorrectedAnswer;
+
+        if (MentionsWrongTomorrowWeekday(answer, snapshot.TomorrowDayOfWeek, out var wrongWeekday))
+        {
+            issues.Add($"答案把明天说成{wrongWeekday}，但游戏状态显示明天星期={snapshot.TomorrowDayOfWeek}。");
+            if (string.IsNullOrWhiteSpace(correctedAnswer))
+                correctedAnswer = BuildWeekdayCorrection(snapshot);
+        }
+
+        return issues.Count == 0
+            ? review
+            : new AnswerReview(false, issues.Distinct().ToList(), correctedAnswer);
+    }
+
+    private static bool MentionsWrongTomorrowWeekday(string answer, string tomorrowDayOfWeek, out string wrongWeekday)
+    {
+        wrongWeekday = "";
+        var correctChinese = ToChineseWeekday(tomorrowDayOfWeek);
+        if (string.IsNullOrWhiteSpace(correctChinese))
+            return false;
+
+        var weekdays = new[] { "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "星期天" };
+        foreach (var weekday in weekdays)
+        {
+            if (weekday == correctChinese)
+                continue;
+
+            if (Regex.IsMatch(answer, $"明天[^。！？\\n]{{0,16}}{Regex.Escape(weekday)}|{Regex.Escape(weekday)}[^。！？\\n]{{0,16}}明天"))
+            {
+                wrongWeekday = weekday;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildWeekdayCorrection(GameSnapshot snapshot)
+    {
+        return $"我刚才的回答里把天气和星期混淆了。当前游戏状态显示：今天是{ToChineseWeekday(snapshot.DayOfWeek)}，明天是{ToChineseWeekday(snapshot.TomorrowDayOfWeek)}；明天天气是 {snapshot.TomorrowWeather}。请以“明天星期={snapshot.TomorrowDayOfWeek}”为准，不要把明天天气当成星期。";
+    }
+
+    private static string ToChineseWeekday(string weekday)
+    {
+        return weekday.ToLowerInvariant() switch
+        {
+            "monday" => "星期一",
+            "tuesday" => "星期二",
+            "wednesday" => "星期三",
+            "thursday" => "星期四",
+            "friday" => "星期五",
+            "saturday" => "星期六",
+            "sunday" => "星期日",
+            _ => weekday
+        };
+    }
+
     private AgentPlan NormalizePlan(AgentPlan plan, bool needsWiki, IReadOnlyList<WikiQuery> fallbackQueries)
     {
-        var queries = DeduplicateQueries(plan.Queries);
+        var queries = NormalizeQueries(plan.Queries);
         if (needsWiki && queries.Count == 0)
-            queries = DeduplicateQueries(fallbackQueries);
+            queries = NormalizeQueries(fallbackQueries);
 
         return plan with
         {
@@ -466,6 +610,9 @@ public sealed class AnswerService
 
     private static IEnumerable<WikiQuery> BuildFallbackQueries(string question, bool needsWiki)
     {
+        if (!needsWiki)
+            yield break;
+
         var npcName = DetectNpc(question);
         if (npcName is not null)
         {
@@ -583,9 +730,102 @@ public sealed class AnswerService
     {
         return queries
             .Where(query => !string.IsNullOrWhiteSpace(query.Text))
-            .GroupBy(query => $"{query.ExactPage}:{query.Text.Trim()}", StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First() with { Text = group.First().Text.Trim() })
+            .GroupBy(query => query.Text.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var selected = group.OrderByDescending(query => query.ExactPage).First();
+                return selected with { Text = selected.Text.Trim() };
+            })
             .ToList();
+    }
+
+    private List<WikiQuery> NormalizeQueries(IEnumerable<WikiQuery> queries)
+    {
+        return DeduplicateQueries(queries.SelectMany(NormalizeQuery));
+    }
+
+    private IEnumerable<WikiQuery> NormalizeQuery(WikiQuery query)
+    {
+        var originalText = query.Text.Trim();
+        var text = NormalizeQueryText(originalText);
+        if (string.IsNullOrWhiteSpace(text))
+            yield break;
+
+        if (TryMapKnownEntity(originalText, out var aliasEntity) || TryMapKnownEntity(text, out aliasEntity))
+        {
+            var title = _wikiTitleIndexService.ContainsTitle(aliasEntity)
+                ? aliasEntity
+                : _wikiTitleIndexService.Match(aliasEntity)?.Title ?? aliasEntity;
+            _debugLogger.Log("keyword-book-match", $"candidate='{originalText}' matched='{title}' method='alias-map'");
+            yield return query with
+            {
+                Text = title,
+                ExactPage = true,
+                Reason = query.Reason + "；已规范化为 wiki 页面实体名，移除时间/位置等意图词。"
+            };
+            yield break;
+        }
+
+        var titleMatch = _wikiTitleIndexService.Match(originalText) ?? _wikiTitleIndexService.Match(text);
+        if (titleMatch is not null)
+        {
+            _debugLogger.Log("keyword-book-match", $"candidate='{originalText}' matched='{titleMatch.Title}' method='{titleMatch.MatchType}'");
+            yield return query with
+            {
+                Text = titleMatch.Title,
+                ExactPage = true,
+                Reason = query.Reason + "；命中本地 wiki 标题关键词本。"
+            };
+            yield break;
+        }
+
+        if (IsInvalidStandaloneWikiTerm(text))
+        {
+            _debugLogger.Log("keyword-book-match", $"candidate='{originalText}' dropped='true' reason='invalid standalone intent term'");
+            yield break;
+        }
+
+        _debugLogger.Log("keyword-book-match", $"candidate='{originalText}' matched='' method='fallback-online-search'");
+        yield return query with { Text = text };
+    }
+
+    private static string NormalizeQueryText(string text)
+    {
+        var normalized = Regex.Replace(text.Trim(), @"\s+", " ");
+        foreach (var term in InvalidStandaloneWikiTerms.OrderByDescending(term => term.Length))
+            normalized = normalized.Replace(term, "", StringComparison.OrdinalIgnoreCase).Trim();
+
+        normalized = Regex.Replace(normalized, @"\s+", " ").Trim(' ', '-', '_', '，', '。', '：', ':', '；', ';');
+        return normalized;
+    }
+
+    private static bool TryMapKnownEntity(string text, out string entity)
+    {
+        foreach (var (canonical, aliases) in WikiEntityAliases)
+        {
+            if (aliases.Any(alias => text.Contains(alias, StringComparison.OrdinalIgnoreCase)))
+            {
+                entity = canonical;
+                return true;
+            }
+        }
+
+        foreach (var aliases in NpcAliases.Values)
+        {
+            if (aliases.Any(alias => text.Contains(alias, StringComparison.OrdinalIgnoreCase)))
+            {
+                entity = aliases[0];
+                return true;
+            }
+        }
+
+        entity = "";
+        return false;
+    }
+
+    private static bool IsInvalidStandaloneWikiTerm(string text)
+    {
+        return InvalidStandaloneWikiTerms.Any(term => text.Equals(term, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<KnowledgeEntry> DeduplicateKnowledge(IEnumerable<KnowledgeEntry> knowledge)
@@ -669,13 +909,15 @@ public sealed class AnswerService
         if (knowledge.Count == 0)
             return "无 wiki 页面。";
 
-        var text = string.Join("\n", knowledge.Select(entry => $"- {entry.Title}: {entry.Content}"));
-        return text.Length <= maxChars ? text : text[..maxChars] + "...";
+        var text = string.Join("\n", knowledge.Select(entry => $"- {entry.Title} ({entry.Content.Length} chars): {entry.Content}"));
+        return text.Length <= maxChars
+            ? text
+            : text[..maxChars] + $"\n...[truncated in log/prompt {maxChars}/{text.Length} chars]";
     }
 
     private static string TrimForLog(string value, int maxChars)
     {
-        return value.Length <= maxChars ? value : value[..maxChars] + "\n...[trimmed]";
+        return value.Length <= maxChars ? value : value[..maxChars] + $"\n...[trimmed in log {maxChars}/{value.Length} chars]";
     }
 
     private static JsonDocument? TryParseJsonObject(string text)
@@ -760,6 +1002,7 @@ public sealed class AnswerService
     private sealed record WikiQuery(string Text, bool ExactPage, string Reason);
     private sealed record AgentPlan(bool NeedsWiki, SupervisorDecision Decision, IReadOnlyList<string> Steps, IReadOnlyList<WikiQuery> Queries);
     private sealed record ExecutionReview(bool IsSufficient, string Summary, IReadOnlyList<string> MissingInfo);
+    private sealed record AnswerReview(bool IsCorrect, IReadOnlyList<string> Issues, string CorrectedAnswer);
     private sealed record ExecutionResult(IReadOnlyList<KnowledgeEntry> Knowledge, IReadOnlyList<string> Logs, string AgentSummary, bool IsSufficient);
     private sealed record NpcLocationResult(string DirectAnswer, string Context);
 }

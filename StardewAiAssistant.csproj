@@ -14,5 +14,6 @@
   <ItemGroup>
     <None Include="manifest.json" CopyToOutputDirectory="Always" />
     <None Include="config.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\wiki-titles.json" CopyToOutputDirectory="Always" />
   </ItemGroup>
 </Project>
