@@ -14,7 +14,7 @@ public sealed class ModConfig
     public string DeepSeekThinking { get; set; } = "disabled";
     public string DeepSeekReasoningEffort { get; set; } = "high";
     public string Language { get; set; } = "zh-CN";
-    public int TimeoutMs { get; set; } = 12000;
+    public int TimeoutMs { get; set; } = 30000;
     public int MaxKnowledgeEntries { get; set; } = 6;
     public bool PreferLocalAnswer { get; set; } = true;
     public bool EnableDebugLogging { get; set; }

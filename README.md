@@ -122,7 +122,7 @@ Stardew Valley\Mods\StardewAiAssistant\config.json
   "DeepSeekThinking": "disabled",
   "DeepSeekReasoningEffort": "high",
   "Language": "zh-CN",
-  "TimeoutMs": 12000,
+  "TimeoutMs": 30000,
   "MaxKnowledgeEntries": 6,
   "PreferLocalAnswer": true,
   "EnableDebugLogging": false
@@ -261,10 +261,10 @@ DeepSeek thinking 开启时的推理强度。
 AI 请求超时时间，单位是毫秒。
 
 ```json
-"TimeoutMs": 12000
+"TimeoutMs": 30000
 ```
 
-如果网络较慢，可以调大，例如 `20000`。
+如果网络较慢，或开启多 Agent 后经常超时，可以继续调大，例如 `60000`。
 
 ### MaxKnowledgeEntries
 
@@ -332,7 +332,7 @@ wiki 内容限制：
   "DeepSeekThinking": "disabled",
   "DeepSeekReasoningEffort": "high",
   "Language": "zh-CN",
-  "TimeoutMs": 12000,
+  "TimeoutMs": 30000,
   "MaxKnowledgeEntries": 6,
   "PreferLocalAnswer": true,
   "EnableDebugLogging": false
@@ -353,7 +353,7 @@ wiki 内容限制：
   "DeepSeekThinking": "disabled",
   "DeepSeekReasoningEffort": "high",
   "Language": "zh-CN",
-  "TimeoutMs": 20000,
+  "TimeoutMs": 60000,
   "MaxKnowledgeEntries": 6,
   "PreferLocalAnswer": true,
   "EnableDebugLogging": false

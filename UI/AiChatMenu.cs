@@ -53,15 +53,19 @@ public sealed class AiChatMenu : IClickableMenu
         if (_pendingAnswer is not { IsCompleted: true })
             return;
 
-        var answer = _pendingAnswer.IsFaulted
-            ? $"回答失败：{_pendingAnswer.Exception?.GetBaseException().Message}"
-            : _pendingAnswer.Result;
+        var pendingAnswer = _pendingAnswer;
+        var pendingCancellation = _pendingCancellation;
+        var cancellationRequested = pendingCancellation?.IsCancellationRequested == true;
 
-        _history.Add("assistant", answer);
-        _scrollOffset = 0;
         _pendingAnswer = null;
-        _pendingCancellation?.Dispose();
         _pendingCancellation = null;
+        pendingCancellation?.Dispose();
+
+        var answer = GetCompletedAnswerText(pendingAnswer, cancellationRequested);
+        if (!string.IsNullOrWhiteSpace(answer))
+            _history.Add("assistant", answer);
+
+        _scrollOffset = 0;
     }
 
     public override void receiveKeyPress(Keys key)
@@ -156,6 +160,29 @@ public sealed class AiChatMenu : IClickableMenu
         _pendingCancellation = new CancellationTokenSource();
         _pendingAnswer = _answerService.AnswerAsync(question, snapshot, _history.Messages, _pendingCancellation.Token);
         Game1.playSound("smallSelect");
+    }
+
+    private static string? GetCompletedAnswerText(Task<string> pendingAnswer, bool cancellationRequested)
+    {
+        if (pendingAnswer.Status == TaskStatus.RanToCompletion)
+            return pendingAnswer.Result;
+
+        if (pendingAnswer.IsCanceled)
+        {
+            return cancellationRequested
+                ? null
+                : "回答超时或请求被取消。请稍后重试，或在 config.json 中调大 TimeoutMs。";
+        }
+
+        var exception = pendingAnswer.Exception?.GetBaseException();
+        if (exception is OperationCanceledException)
+        {
+            return cancellationRequested
+                ? null
+                : "回答超时或请求被取消。请稍后重试，或在 config.json 中调大 TimeoutMs。";
+        }
+
+        return $"回答失败：{exception?.Message ?? "未知错误"}";
     }
 
     private void Scroll(int lines)
