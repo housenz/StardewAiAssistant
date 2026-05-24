@@ -25,6 +25,11 @@ public sealed class GameSnapshot
     public string FarmCrops { get; set; } = "unknown";
     public string Wallet { get; set; } = "unknown";
     public string WorldProgress { get; set; } = "unknown";
+    public string FarmBuildings { get; set; } = "unknown";
+    public string FarmAnimals { get; set; } = "unknown";
+    public string Recipes { get; set; } = "unknown";
+    public string Collections { get; set; } = "unknown";
+    public string KeyFlags { get; set; } = "unknown";
     public string Stardrops { get; set; } = "unknown";
     public string Social { get; set; } = "unknown";
     public string ActiveQuests { get; set; } = "unknown";
@@ -45,6 +50,11 @@ public sealed class GameSnapshot
             $"- 农场作物：{FarmCrops}",
             $"- 钱包/能力：{Wallet}",
             $"- 世界进度：{WorldProgress}",
+            $"- 农场建筑：{FarmBuildings}",
+            $"- 农场动物：{FarmAnimals}",
+            $"- 配方：{Recipes}",
+            $"- 收集统计：{Collections}",
+            $"- 关键标记：{KeyFlags}",
             $"- 星之果实：{Stardrops}",
             $"- 社交：{Social}",
             $"- 当前任务：{ActiveQuests}"

@@ -19,6 +19,8 @@ public sealed class AiChatMenu : IClickableMenu
     private CancellationTokenSource? _pendingCancellation;
     private int _scrollOffset;
 
+    public bool CanCloseWithHotkey => string.IsNullOrWhiteSpace(_input.Text);
+
     public AiChatMenu(AnswerService answerService, GameContextService gameContextService, ChatHistoryService history)
         : base(
             Math.Max(16, Game1.uiViewport.Width / 2 - Math.Min(1040, Game1.uiViewport.Width - 64) / 2),
@@ -42,12 +44,13 @@ public sealed class AiChatMenu : IClickableMenu
 
         _clearButton = new ClickableComponent(new Rectangle(xPositionOnScreen + width - 132, yPositionOnScreen + 28, 96, 36), "clear");
 
-        Game1.keyboardDispatcher.Subscriber = _input;
+        FocusInput();
     }
 
     public override void update(GameTime time)
     {
         base.update(time);
+        FocusInput();
         _input.Update();
 
         if (_pendingAnswer is not { IsCompleted: true })
@@ -112,6 +115,7 @@ public sealed class AiChatMenu : IClickableMenu
             return;
         }
 
+        FocusInput();
         base.receiveLeftClick(x, y, playSound);
     }
 
@@ -160,6 +164,13 @@ public sealed class AiChatMenu : IClickableMenu
         _pendingCancellation = new CancellationTokenSource();
         _pendingAnswer = _answerService.AnswerAsync(question, snapshot, _history.Messages, _pendingCancellation.Token);
         Game1.playSound("smallSelect");
+    }
+
+    private void FocusInput()
+    {
+        _input.Selected = true;
+        if (Game1.keyboardDispatcher.Subscriber != _input)
+            Game1.keyboardDispatcher.Subscriber = _input;
     }
 
     private static string? GetCompletedAnswerText(Task<string> pendingAnswer, bool cancellationRequested)

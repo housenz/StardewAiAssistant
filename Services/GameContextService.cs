@@ -38,6 +38,11 @@ public sealed class GameContextService
             FarmCrops = BuildFarmCrops(),
             Wallet = BuildWallet(farmer),
             WorldProgress = BuildWorldProgress(farmer),
+            FarmBuildings = BuildFarmBuildings(),
+            FarmAnimals = BuildFarmAnimals(),
+            Recipes = BuildRecipes(farmer),
+            Collections = BuildCollections(farmer),
+            KeyFlags = BuildKeyFlags(farmer),
             Stardrops = BuildStardrops(farmer),
             Social = BuildSocial(farmer),
             ActiveQuests = BuildActiveQuests(farmer)
@@ -165,10 +170,10 @@ public sealed class GameContextService
 
         var names = new List<string>();
         var usedSlots = 0;
-        var totalSlots = 0;
+        var enumeratedSlots = 0;
         foreach (var item in items)
         {
-            totalSlots++;
+            enumeratedSlots++;
             if (item is null)
                 continue;
 
@@ -183,24 +188,33 @@ public sealed class GameContextService
         if (names.Count > 18)
             preview += $"，另有 {names.Count - 18} 项";
 
-        return $"{usedSlots}/{totalSlots} 格；{preview}";
+        var capacity = ReadInventoryCapacity(farmer) ?? enumeratedSlots;
+        return $"已用 {usedSlots} 格，容量 {capacity} 格；{preview}";
     }
 
     private static string BuildFarmCrops()
     {
         var farm = ReadStaticValue(typeof(Game1), "farm")
             ?? typeof(Game1).GetMethod("getFarm", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.Invoke(null, Array.Empty<object>());
+        if (farm is null)
+            return "无法读取农场对象";
+
         var terrainFeatures = ReadValue(farm, "terrainFeatures") as IEnumerable;
         if (terrainFeatures is null)
-            return "unknown";
+            terrainFeatures = ReadValue(ReadValue(farm, "terrainFeatures"), "Pairs") as IEnumerable;
+        if (terrainFeatures is null)
+            return "无法枚举农场 terrainFeatures";
 
         var crops = new List<CropInfo>();
+        var hoeDirtCount = 0;
         foreach (var entry in terrainFeatures)
         {
             var feature = ReadProperty(entry, "Value");
+            feature ??= entry;
             if (feature is null || !feature.GetType().Name.Contains("HoeDirt", StringComparison.OrdinalIgnoreCase))
                 continue;
 
+            hoeDirtCount++;
             var crop = ReadValue(feature, "crop");
             if (crop is null)
                 continue;
@@ -214,7 +228,9 @@ public sealed class GameContextService
         }
 
         if (crops.Count == 0)
-            return "农场没有检测到已种植作物，或当前版本无法读取作物数据";
+            return hoeDirtCount == 0
+                ? "已读取农场 terrainFeatures，但未发现耕地或已种植作物"
+                : $"已读取到 {hoeDirtCount} 块耕地，但没有检测到 crop 数据";
 
         var grouped = crops
             .GroupBy(crop => new { crop.Name, crop.Watered, crop.DaysLeft })
@@ -229,6 +245,24 @@ public sealed class GameContextService
             });
 
         return string.Join("；", grouped);
+    }
+
+    private static int? ReadInventoryCapacity(object? farmer)
+    {
+        var candidates = new[]
+        {
+            ReadInt(farmer, "MaxItems"),
+            ReadInt(farmer, "maxItems"),
+            ReadInt(farmer, "MaxInventoryItems"),
+            ReadInt(farmer, "maxInventoryItems")
+        };
+
+        var value = candidates.FirstOrDefault(candidate => candidate is > 0);
+        if (value is not null)
+            return value;
+
+        var items = ReadValue(farmer, "Items");
+        return ReadInt(items, "Capacity") ?? ReadInt(items, "Count");
     }
 
     private static string BuildProfessions(object? farmer)
@@ -310,12 +344,127 @@ public sealed class GameContextService
         var mineUnlocked = ToYesNo(ReadInt(farmer, "deepestMineLevel") > 0);
         var skullKey = ToYesNo(ReadBool(farmer, "hasSkullKey") is true);
         var sewer = ToYesNo(ReadBool(farmer, "hasRustyKey") is true);
+        var jojaMember = ToYesNo(HasAnyMail(farmer, "JojaMember"));
         var desert = ToYesNo(HasAnyMail(farmer, "ccVault", "jojaVault"));
         var greenhouse = ToYesNo(HasAnyMail(farmer, "ccPantry", "jojaPantry"));
         var communityCenter = ToYesNo(HasAnyMail(farmer, "ccComplete"));
         var gingerIsland = ToYesNo(HasAnyMail(farmer, "willyBoatFixed", "Visited_Island", "islandNorthCaveOpened"));
 
-        return $"矿洞已解锁={mineUnlocked}，矿洞最深层={deepestMineLevel}，骷髅洞钥匙={skullKey}，沙漠={desert}，下水道={sewer}，温室={greenhouse}，社区中心完成={communityCenter}，姜岛={gingerIsland}";
+        return $"矿洞已解锁={mineUnlocked}，矿洞最深层={deepestMineLevel}，骷髅洞钥匙={skullKey}，Joja会员={jojaMember}，沙漠={desert}，下水道={sewer}，温室={greenhouse}，社区中心完成={communityCenter}，姜岛={gingerIsland}";
+    }
+
+    private static string BuildFarmBuildings()
+    {
+        var farm = ReadStaticValue(typeof(Game1), "farm")
+            ?? typeof(Game1).GetMethod("getFarm", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.Invoke(null, Array.Empty<object>());
+        if (farm is null)
+            return "无法读取农场对象";
+
+        var buildings = ReadValue(farm, "buildings") as IEnumerable;
+        if (buildings is null)
+            return "无法读取建筑列表";
+
+        var entries = new List<string>();
+        foreach (var building in buildings)
+        {
+            var type = ReadString(building, "buildingType", ReadString(building, "BuildingType", building?.GetType().Name ?? "未知建筑"));
+            var tileX = ReadInt(building, "tileX") ?? ReadInt(building, "tileXOverride");
+            var tileY = ReadInt(building, "tileY") ?? ReadInt(building, "tileYOverride");
+            var days = ReadInt(building, "daysUntilUpgrade") ?? ReadInt(building, "daysOfConstructionLeft");
+            var indoors = ReadValue(building, "indoors");
+            var animalCount = CountEnumerable(ReadValue(indoors, "animals"));
+            var detail = $"{type}";
+            if (tileX is not null && tileY is not null)
+                detail += $"@({tileX},{tileY})";
+            if (days is > 0)
+                detail += $"，建设/升级剩余{days}天";
+            if (animalCount > 0)
+                detail += $"，动物{animalCount}只";
+            entries.Add(detail);
+        }
+
+        return entries.Count == 0 ? "无建筑或无法检测到建筑" : string.Join("；", entries.Take(20));
+    }
+
+    private static string BuildFarmAnimals()
+    {
+        var farm = ReadStaticValue(typeof(Game1), "farm")
+            ?? typeof(Game1).GetMethod("getFarm", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.Invoke(null, Array.Empty<object>());
+        if (farm is null)
+            return "无法读取农场对象";
+
+        var animals = new List<string>();
+        CollectAnimals(ReadValue(farm, "animals"), animals);
+
+        var buildings = ReadValue(farm, "buildings") as IEnumerable;
+        if (buildings is not null)
+        {
+            foreach (var building in buildings)
+            {
+                var indoors = ReadValue(building, "indoors");
+                CollectAnimals(ReadValue(indoors, "animals"), animals);
+            }
+        }
+
+        if (animals.Count == 0)
+            return "无动物或无法检测到动物";
+
+        return string.Join("；", animals.GroupBy(value => value).OrderByDescending(group => group.Count()).Select(group => $"{group.Key} x{group.Count()}").Take(20));
+    }
+
+    private static void CollectAnimals(object? source, List<string> output)
+    {
+        if (source is not IEnumerable enumerable)
+            return;
+
+        foreach (var item in enumerable)
+        {
+            var animal = ReadProperty(item, "Value") ?? item;
+            var type = ReadString(animal, "type", ReadString(animal, "displayType", ReadString(animal, "DisplayType", animal?.GetType().Name ?? "未知动物")));
+            var name = ReadString(animal, "displayName", ReadString(animal, "Name", ""));
+            output.Add(string.IsNullOrWhiteSpace(name) || name == type ? type : $"{name}({type})");
+        }
+    }
+
+    private static string BuildRecipes(object? farmer)
+    {
+        var cooking = CountEnumerable(ReadValue(farmer, "cookingRecipes"));
+        var crafting = CountEnumerable(ReadValue(farmer, "craftingRecipes"));
+        return $"烹饪配方已学={FormatCount(cooking)}，制作配方已学={FormatCount(crafting)}";
+    }
+
+    private static string BuildCollections(object? farmer)
+    {
+        var shipped = CountEnumerable(ReadValue(farmer, "basicShipped"));
+        var fish = CountEnumerable(ReadValue(farmer, "fishCaught"));
+        var minerals = CountEnumerable(ReadValue(farmer, "mineralsFound"));
+        var artifacts = CountEnumerable(ReadValue(farmer, "archaeologyFound"));
+        var cooked = CountEnumerable(ReadValue(farmer, "recipesCooked"));
+        var crafted = CountEnumerable(ReadValue(farmer, "craftingRecipes"));
+        return $"出货条目={FormatCount(shipped)}，钓鱼图鉴={FormatCount(fish)}，矿物={FormatCount(minerals)}，古物={FormatCount(artifacts)}，做过料理={FormatCount(cooked)}，已学制作配方={FormatCount(crafted)}";
+    }
+
+    private static string BuildKeyFlags(object? farmer)
+    {
+        var checks = new[]
+        {
+            ("Joja会员", HasAnyMail(farmer, "JojaMember")),
+            ("社区中心开启", HasAnyMail(farmer, "ccDoorUnlock", "seenJunimoNote")),
+            ("社区中心完成", HasAnyMail(farmer, "ccComplete")),
+            ("温室修复", HasAnyMail(farmer, "ccPantry", "jojaPantry")),
+            ("矿车修复", HasAnyMail(farmer, "ccBoilerRoom", "jojaBoilerRoom")),
+            ("巴士修复", HasAnyMail(farmer, "ccVault", "jojaVault")),
+            ("桥梁修复", HasAnyMail(farmer, "ccCraftsRoom", "jojaCraftsRoom")),
+            ("淘金盘", HasAnyMail(farmer, "ccFishTank", "jojaFishTank")),
+            ("威利的船", HasAnyMail(farmer, "willyBoatFixed")),
+            ("姜岛到达", HasAnyMail(farmer, "Visited_Island")),
+            ("矮人语", ReadBool(farmer, "canUnderstandDwarves") is true),
+            ("下水道钥匙", ReadBool(farmer, "hasRustyKey") is true),
+            ("骷髅钥匙", ReadBool(farmer, "hasSkullKey") is true),
+            ("赌场会员卡", ReadBool(farmer, "hasClubCard") is true)
+        };
+
+        return string.Join("，", checks.Select(check => $"{check.Item1}={(check.Item2 ? "是" : "未确认")}"));
     }
 
     private static string BuildStardrops(object? farmer)
@@ -402,6 +551,22 @@ public sealed class GameContextService
         }
 
         return false;
+    }
+
+    private static int CountEnumerable(object? collection)
+    {
+        if (collection is not IEnumerable enumerable)
+            return -1;
+
+        var count = 0;
+        foreach (var _ in enumerable)
+            count++;
+        return count;
+    }
+
+    private static string FormatCount(int count)
+    {
+        return count < 0 ? "unknown" : count.ToString();
     }
 
     private static string FormatPair(int? current, int? max)

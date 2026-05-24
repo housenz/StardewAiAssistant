@@ -36,12 +36,20 @@ public sealed class ModEntry : Mod
         if (!Context.IsWorldReady)
             return;
 
-        if (Game1.activeClickableMenu is not null)
-            return;
-
         if (e.Button != _config.OpenMenuButton)
             return;
 
+        if (Game1.activeClickableMenu is AiChatMenu aiChatMenu && aiChatMenu.CanCloseWithHotkey)
+        {
+            aiChatMenu.exitThisMenu();
+            Helper.Input.Suppress(e.Button);
+            return;
+        }
+
+        if (Game1.activeClickableMenu is not null)
+            return;
+
         Game1.activeClickableMenu = new AiChatMenu(_answerService, _gameContextService, _chatHistoryService);
+        Helper.Input.Suppress(e.Button);
     }
 }

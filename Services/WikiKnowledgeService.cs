@@ -63,11 +63,17 @@ public sealed class WikiKnowledgeService
 
     public async Task<KnowledgeEntry?> GetPageAsync(string title, CancellationToken cancellationToken)
     {
+        var result = await GetPageWithMetadataAsync(title, cancellationToken);
+        return result?.Entry;
+    }
+
+    public async Task<WikiPageFetchResult?> GetPageWithMetadataAsync(string title, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(title))
             return null;
 
         if (_pageCache.TryGetValue(title, out var cached))
-            return cached;
+            return new WikiPageFetchResult(cached, true);
 
         try
         {
@@ -81,13 +87,47 @@ public sealed class WikiKnowledgeService
             if (entry is not null)
                 _pageCache[title] = entry;
 
-            return entry;
+            return entry is null ? null : new WikiPageFetchResult(entry, false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _monitor.Log($"Online wiki page fetch failed for '{title}': {ex.Message}", LogLevel.Warn);
             return null;
         }
+    }
+
+    public async Task<IReadOnlyList<string>> SearchTitlesOnlyAsync(string query, int limit, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return Array.Empty<string>();
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(10)
+            };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("StardewAiAssistant/0.1");
+            return await SearchTitlesAsync(client, query, Math.Clamp(limit, 1, 20), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _monitor.Log($"Online wiki title search failed for '{query}': {ex.Message}", LogLevel.Warn);
+            return Array.Empty<string>();
+        }
+    }
+
+    public async Task<WikiPagePreview?> GetPagePreviewAsync(string title, int maxChars, CancellationToken cancellationToken)
+    {
+        var result = await GetPageWithMetadataAsync(title, cancellationToken);
+        if (result?.Entry is null)
+            return null;
+
+        var content = result.Entry.Content.Length <= maxChars
+            ? result.Entry.Content
+            : result.Entry.Content[..maxChars] + $"...[preview truncated {maxChars}/{result.Entry.Content.Length} chars]";
+
+        return new WikiPagePreview(result.Entry.Title, content, result.FromCache);
     }
 
     private static string BuildSearchQuery(string question, GameSnapshot snapshot)
@@ -189,9 +229,28 @@ public sealed class WikiKnowledgeService
     {
         var noScript = Regex.Replace(html, "<script.*?</script>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         var noStyle = Regex.Replace(noScript, "<style.*?</style>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        noStyle = Regex.Replace(noStyle, "<templatestyles.*?</templatestyles>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        noStyle = Regex.Replace(noStyle, "<h[1-6][^>]*>", "\n== ", RegexOptions.IgnoreCase);
+        noStyle = Regex.Replace(noStyle, "</h[1-6]>", " ==\n", RegexOptions.IgnoreCase);
+        noStyle = Regex.Replace(noStyle, "</tr>", "\n", RegexOptions.IgnoreCase);
+        noStyle = Regex.Replace(noStyle, "</t[dh]>\\s*<t[dh][^>]*>", "：", RegexOptions.IgnoreCase);
+        noStyle = Regex.Replace(noStyle, "<br\\s*/?>|</p>|</li>|</div>", "\n", RegexOptions.IgnoreCase);
+        noStyle = Regex.Replace(noStyle, "<li[^>]*>", "- ", RegexOptions.IgnoreCase);
+
         var text = HtmlTagRegex.Replace(noStyle, " ");
         text = WebUtility.HtmlDecode(text);
-        return WhitespaceRegex.Replace(text, " ").Trim();
+        text = RemoveCssNoise(text);
+        text = Regex.Replace(text, "[ \\t\\x0B\\f\\r]+", " ");
+        text = Regex.Replace(text, "\\n\\s+", "\n");
+        text = Regex.Replace(text, "\\n{3,}", "\n\n");
+        return text.Trim();
+    }
+
+    private static string RemoveCssNoise(string text)
+    {
+        var cleaned = Regex.Replace(text, @"(?s)(?:\.[A-Za-z0-9_-]+|#[A-Za-z0-9_-]+|[A-Za-z][A-Za-z0-9_-]*)\s*\{[^{}]*\}", " ");
+        cleaned = Regex.Replace(cleaned, @"(?i)\b(?:display|margin|padding|border|background|color|font-size|line-height|width|height|overflow|cursor|user-select|text-decoration|transition|align-items|justify-content|flex|gap|scrollbar-width)\s*:\s*[^;。；\n]+[;；]?", " ");
+        return Regex.Replace(cleaned, "[ \\t\\x0B\\f\\r]+", " ");
     }
 
     private static string[] BuildKeywords(string title)
@@ -203,3 +262,6 @@ public sealed class WikiKnowledgeService
             .ToArray();
     }
 }
+
+public sealed record WikiPageFetchResult(KnowledgeEntry Entry, bool FromCache);
+public sealed record WikiPagePreview(string Title, string Preview, bool FromCache);
